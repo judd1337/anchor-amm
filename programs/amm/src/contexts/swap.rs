@@ -96,7 +96,6 @@ impl<'info> Swap<'info> {
         self.deposit_tokens(is_x, res.deposit)?;
         // withdraw tokens
         self.withdraw_tokens(is_x, res.withdraw)?;
-        // transfer fee
 
         Ok(())
     }

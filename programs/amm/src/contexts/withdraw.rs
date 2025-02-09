@@ -88,11 +88,11 @@ impl<'info> Withdraw<'info> {
 
         require!(min_x <= amounts.x && min_y <= amounts.y, AmmError::SlippageExceeded);
 
-        // deposit token x
+        // withdraw token x
         self.withdraw_tokens(true, amounts.x)?;
-        // deposit token y
+        // withdraw token y
         self.withdraw_tokens(false, amounts.y)?;
-        // mint lp tokens
+        // burn lp tokens
         self.burn_lp_tokens(lp_amount);
 
         Ok(())
