@@ -1,18 +1,17 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
-    associated_token::AssociatedToken,
-    token::{Mint, Token, TokenAccount},
+    associated_token::AssociatedToken, token::{Mint, Token, TokenAccount},
 };
 
 use crate::state::Config;
 
 #[derive(Accounts)]
 #[instruction(seed: u64)]
-pub struct Initialize<'Info> {
+pub struct Initialize<'info> {
     #[account(mut)]
-    pub initializer: Signer<'Info>,
-    pub mint_x: Account<'Info, Mint>,
-    pub mint_y: Account<'Info, Mint>,
+    pub initializer: Signer<'info>,
+    pub mint_x: Account<'info, Mint>,
+    pub mint_y: Account<'info, Mint>,
 
     #[account(
         init,
@@ -22,7 +21,7 @@ pub struct Initialize<'Info> {
         mint::decimals = 6,
         mint::authority = config,
     )]
-    pub mint_lp: Account<'Info, Mint>,
+    pub mint_lp: Account<'info, Mint>,
 
     #[account(
         init,
@@ -30,7 +29,7 @@ pub struct Initialize<'Info> {
         associated_token::mint = mint_x,
         associated_token::authority = config,
     )]
-    pub vault_x: Account<'Info, TokenAccount>,
+    pub vault_x: Account<'info, TokenAccount>,
 
     #[account(
         init,
@@ -38,7 +37,7 @@ pub struct Initialize<'Info> {
         associated_token::mint = mint_y,
         associated_token::authority = config,
     )]
-    pub vault_y: Account<'Info, TokenAccount>,
+    pub vault_y: Account<'info, TokenAccount>,
 
     #[account(
         init,
@@ -47,14 +46,14 @@ pub struct Initialize<'Info> {
         bump,
         space = Config::INIT_SPACE,
     )]
-    pub config: Account<'Info, Config>,
+    pub config: Account<'info, Config>,
 
-    pub token_program: Program<'Info, Token>,
-    pub associated_token: Program<'Info, AssociatedToken>,
-    pub system_program: Program<'Info, System>
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>, 
+    pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
-impl<'Info> Initialize<'Info> {
+impl<'info> Initialize<'info> {
     pub fn init(
         &mut self,
         seed: u64,
@@ -69,8 +68,10 @@ impl<'Info> Initialize<'Info> {
             mint_y: self.mint_y.key(),
             fee,
             locked: false,
-            config_bump: bumps.,
-            
-        })
+            config_bump: bumps.config,
+            lp_bump: bumps.mint_lp,
+        });
+
+        Ok(())
     }
 }

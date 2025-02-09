@@ -1,14 +1,13 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
-    associated_token::AssociatedToken, token::{mint_to, transfer, Mint, MintTo, Token, TokenAccount, Transfer},
+    associated_token::AssociatedToken, token::{transfer, Mint, Token, TokenAccount, Transfer}
 };
-
-use constant_product_curve::ConstantProduct;
+use constant_product_curve::{ConstantProduct, LiquidityPair};
 
 use crate::{errors::AmmError, state::Config};
 
 #[derive(Accounts)]
-pub struct Deposit<'info> {
+pub struct Swap<'info> {
     #[account(mut)]
     pub lp_provider: Signer<'info>,
     pub mint_x: Account<'info, Mint>,
@@ -23,9 +22,9 @@ pub struct Deposit<'info> {
 
     #[account(
         seeds = [b"lp", config.key().as_ref()],
+        bump = config.lp_bump,
         mint::decimals = 6,
         mint::authority = config,
-        bump = config.lp_bump,
     )]
     pub mint_lp: Account<'info, Mint>,
 
@@ -63,39 +62,43 @@ pub struct Deposit<'info> {
     )]
     pub lp_provider_lp: Account<'info, TokenAccount>,
 
-    pub system_program: Program<'info, System>,
+
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
-impl<'info> Deposit<'info> {
-    pub fn deposit(&mut self, 
-        lp_amount: u64, // Amount of LP tokens that the user wants to "claim"
-        max_x: u64, // Maximum amount of token X that the user is willing to deposit
-        max_y: u64, // Maximum amount of token Y that the user is willing to deposit
-    ) -> Result<()> {
-        let (x, y) = match self.mint_lp.supply == 0 && self.vault_x.amount == 0 && self.vault_y.amount == 0 {
-            true => (max_x, max_y),
-            false => {
-                let amount = ConstantProduct::xy_deposit_amounts_from_l(
-                    self.vault_x.amount,
-                    self.vault_y.amount,
-                    self.mint_lp.supply,
-                    lp_amount,
-                    6
-                ).unwrap();
-                (amount.x, amount.y)
-            },
+impl<'info> Swap<'info> {
+    pub fn swap(&mut self, is_x: bool, amount: u64, min: u64) -> Result<()> {
+        require!(self.config.locked == false, AmmError::PoolLocked);
+        require!(amount > 0, AmmError::InvalidAmount);
+
+        let mut curve = ConstantProduct::init(
+            self.vault_x.amount,
+             self.vault_y.amount, 
+             self.vault_x.amount, 
+             self.config.fee,
+            None,
+        )
+        .map_err(AmmError::from)?;
+
+        let p = match is_x {
+            true => LiquidityPair::X,
+            false => LiquidityPair::Y,
         };
 
-        require!(x <= max_x && y <= max_y, AmmError::SlippageExceeded);
+        let res = curve.swap(p, amount, min).map_err(AmmError::from)?;
 
-        // deposit token x
-        self.deposit_tokens(true, x)?;
-        // deposit token y
-        self.deposit_tokens(false, y)?;
-        // mint lp tokens
-        self.mint_lp_tokens(lp_amount)
+        require!(res.deposit != 0, AmmError::InvalidAmount);
+        require!(res.withdraw != 0, AmmError::InvalidAmount);
+
+        // deposit tokens
+        self.deposit_tokens(is_x, res.deposit)?;
+        // withdraw tokens
+        self.withdraw_tokens(is_x, res.withdraw)?;
+        // transfer fee
+
+        Ok(())
     }
     
     fn deposit_tokens(&mut self, is_x: bool, amount: u64) -> Result<()> {
@@ -107,22 +110,29 @@ impl<'info> Deposit<'info> {
 
         let cpi_program = self.token_program.to_account_info();
 
-        let cpi_accounts = Transfer {
+        let cpi_account = Transfer {
             from, // lp_provider_x OR lp_provider_y ?
             to, // vault_x OR vault_y ?
             authority: self.lp_provider.to_account_info(),
         };
 
-        let cpi_context= CpiContext::new(cpi_program, cpi_accounts);
-        transfer(cpi_context, amount)
+        let cpi_context= CpiContext::new(cpi_program, cpi_account);
+        transfer(cpi_context, amount)?;
+
+        Ok(())
     }
 
-    fn mint_lp_tokens(&mut self, amount: u64) -> Result<()> {
+    pub fn withdraw_tokens(&mut self, is_x: bool, amount: u64) -> Result<()> {
+        let (from, to) = match is_x {
+            true => (self.vault_y.to_account_info() , self.lp_provider_y.to_account_info()),
+            false => (self.vault_x.to_account_info(), self.lp_provider_x.to_account_info()),
+        };
+
         let cpi_program = self.token_program.to_account_info();
 
-        let cpi_accounts = MintTo {
-            mint: self.mint_lp.to_account_info(), 
-            to: self.lp_provider_lp.to_account_info(),
+        let accounts = Transfer {
+            from: from.to_account_info(),
+            to: to.to_account_info(),
             authority: self.config.to_account_info(),
         };
 
@@ -131,10 +141,12 @@ impl<'info> Deposit<'info> {
             &self.config.seed.to_le_bytes(),
             &[self.config.config_bump],
         ];
-
         let signer_seeds = &[&seeds[..]];
 
-        let cpi_context= CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
-        mint_to(cpi_context, amount)
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, accounts, signer_seeds);
+
+        transfer(cpi_ctx, amount)?;
+
+        Ok(())
     }
 }
